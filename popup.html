@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LinkedIn Feed Off</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">LinkedIn Feed Off</p>
+          <h1 id="status-title">Feed is off</h1>
+        </div>
+        <label class="switch">
+          <span class="sr-only">Disable LinkedIn feed</span>
+          <input id="enabled" type="checkbox" checked />
+          <span class="slider" aria-hidden="true"></span>
+        </label>
+      </header>
+      <p id="status-copy">Jobs, messaging, and profiles still work.</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

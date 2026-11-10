@@ -1,0 +1,25 @@
+/*
+ * Applied at document_start. Route + enabled attributes are set before
+ * LinkedIn paints so the home feed does not flash.
+ */
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .scaffold-layout__main > *:not(#li-feed-off-host),
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .core-rail > *:not(#li-feed-off-host),
+html[data-li-feed-off="on"][data-li-feed-page="feed"] [componentkey="container-update-list_mainFeed-lazy-container"],
+html[data-li-feed-off="on"][data-li-feed-page="feed"] [data-view-name="feed-full-update"],
+html[data-li-feed-off="on"][data-li-feed-page="feed"] article[data-id="main-feed-card"],
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .feed-shared-update-v2,
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .occludable-update,
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .scaffold-finite-scroll,
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .share-box-feed-entry,
+html[data-li-feed-off="on"][data-li-feed-page="feed"] .share-box-feed-entry__wrapper,
+html[data-li-feed-off="on"][data-li-feed-page="feed"] [data-view-name*="share-box"],
+html[data-li-feed-off="on"][data-li-feed-page="feed"] [data-testid="mainFeed"],
+html[data-li-feed-off="on"][data-li-feed-page="feed"] [data-li-feed-off-hide] {
+  display: none !important;
+}
+
+#li-feed-off-host {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+}

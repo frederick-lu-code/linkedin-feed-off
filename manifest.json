@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Feed Off",
-  "version": "1.0.0",
-  "description": "Disables the LinkedIn home feed. Jobs, messaging, notifications, and profiles still work.",
+  "version": "1.1.0",
+  "description": "Disables the LinkedIn home feed and other people's profiles. Jobs and your own profile still work.",
   "minimum_chrome_version": "111",
   "permissions": ["storage"],
   "action": {

@@ -3,7 +3,7 @@
 
   const HOST_ID = "li-feed-off-host";
   const HIDE_ATTR = "data-li-feed-off-hide";
-  const DEFAULTS = { enabled: true };
+  const DEFAULTS = { enabled: true, blockProfiles: true };
   const FEED_CONTAINERS = [
     '[componentkey="container-update-list_mainFeed-lazy-container"]',
     '[data-testid="mainFeed"]',
@@ -13,13 +13,27 @@
 
   const root = document.documentElement;
   let enabled = true;
+  let blockProfiles = true;
   let applyQueued = false;
   let panelHost = null;
+  let panelKey = "";
 
-  root.dataset.liFeedOff = "on";
-  root.dataset.liFeedPage = classifyPath(location.pathname);
+  // Your own public profile slug (the part after /in/). Cached across page
+  // loads so your profile opens without a delay, and re-checked against
+  // LinkedIn once per page load so a switched account can't reuse it.
+  let ownSlug = null;
+  let ownCheck = "idle"; // idle | loading | done
+  let ownCheckFailed = false;
 
-  function classifyPath(pathname) {
+  function normalizeSlug(slug) {
+    try {
+      return decodeURIComponent(slug).trim().toLowerCase();
+    } catch {
+      return String(slug).trim().toLowerCase();
+    }
+  }
+
+  function route(pathname) {
     const path = (pathname || "/").replace(/\/+$/, "") || "/";
     if (
       path.startsWith("/uas/login") ||
@@ -28,21 +42,97 @@
       path.startsWith("/authwall") ||
       path.startsWith("/signup")
     ) {
-      return "login";
+      return { page: "login" };
     }
-    if (path.startsWith("/feed/update")) return "other";
-    if (path === "/" || path === "/feed" || path.startsWith("/feed")) return "feed";
-    if (path === "/preload" || path.startsWith("/preload")) return "feed";
-    return "other";
+    if (path.startsWith("/feed/update")) return { page: "other" };
+    if (path === "/" || path.startsWith("/feed") || path.startsWith("/preload")) {
+      return { page: "feed" };
+    }
+
+    const profile = path.match(/^\/in\/([^/]+)/);
+    if (profile) return { page: "profile", slug: normalizeSlug(profile[1]) };
+
+    // Pages whose main purpose is listing other people's profiles.
+    if (
+      path.startsWith("/pub/") ||
+      path.startsWith("/mynetwork") ||
+      /^\/search\/results\/(people|all)(\/|$)/.test(path) ||
+      /^\/(company|school)\/[^/]+\/people(\/|$)/.test(path)
+    ) {
+      return { page: "people" };
+    }
+    return { page: "other" };
   }
 
-  function isFeedPage() {
-    return enabled && classifyPath(location.pathname) === "feed";
+  // What the page should show right now:
+  // off | feed | profile-own | profile-pending | blocked | other
+  function computeView() {
+    if (!enabled) return "off";
+    const r = route(location.pathname);
+    if (r.page === "feed") return "feed";
+    if (!blockProfiles) return "other";
+    if (r.page === "people") return "blocked";
+    if (r.page !== "profile") return "other";
+
+    // /in/me/ is LinkedIn's shortcut to your own profile.
+    if (r.slug === "me") return "profile-own";
+    if (ownSlug && r.slug === ownSlug) return "profile-own";
+    if (ownCheck !== "done") {
+      checkOwnProfile();
+      return "profile-pending";
+    }
+    return "blocked";
   }
 
-  function syncAttributes() {
+  function csrfToken() {
+    const match = document.cookie.match(/(?:^|;\s*)JSESSIONID="?([^";]+)"?/);
+    return match ? match[1] : null;
+  }
+
+  function findPublicIdentifier(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 6) return null;
+    if (typeof value.publicIdentifier === "string" && value.publicIdentifier) {
+      return value.publicIdentifier;
+    }
+    for (const child of Object.values(value)) {
+      const found = findPublicIdentifier(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function checkOwnProfile() {
+    if (ownCheck !== "idle") return;
+    ownCheck = "loading";
+    (async () => {
+      try {
+        const token = csrfToken();
+        if (!token) throw new Error("Not signed in");
+        const res = await fetch("/voyager/api/me", {
+          credentials: "include",
+          headers: {
+            "csrf-token": token,
+            "x-restli-protocol-version": "2.0.0",
+            accept: "application/json",
+          },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const id = findPublicIdentifier(await res.json());
+        if (!id) throw new Error("No profile id in response");
+        ownSlug = normalizeSlug(id);
+        chrome.storage.local.set({ ownSlug });
+      } catch {
+        ownCheckFailed = true;
+      } finally {
+        ownCheck = "done";
+        queueApply();
+      }
+    })();
+  }
+
+  function syncAttributes(view) {
     root.dataset.liFeedOff = enabled ? "on" : "off";
-    root.dataset.liFeedPage = classifyPath(location.pathname);
+    root.dataset.liFeedPage = view;
   }
 
   function clearHidden() {
@@ -61,9 +151,23 @@
   function panelStyles() {
     return `
       :host { all: initial; display: block; }
+      :host([data-mode="overlay"]) {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+        background: #f4f2ee;
+        overflow: auto;
+      }
       .panel {
         box-sizing: border-box;
-        margin: 16px 0 24px;
+        width: 100%;
+        max-width: 520px;
+        margin: 16px auto 24px;
         padding: 28px 24px;
         border: 1px solid #e0e0e0;
         border-radius: 12px;
@@ -84,6 +188,7 @@
         font-size: 15px;
         line-height: 1.45;
       }
+      p.quiet { margin: 0; }
       .actions {
         display: flex;
         flex-wrap: wrap;
@@ -109,66 +214,94 @@
     `;
   }
 
-  function origin() {
-    return location.origin;
+  function link(href, label, secondary) {
+    return `<a${secondary ? ' class="secondary"' : ""} href="${location.origin}${href}">${label}</a>`;
   }
 
-  function ensurePanel() {
-    if (panelHost?.isConnected) return panelHost;
-    panelHost = document.getElementById(HOST_ID);
-    if (panelHost) return panelHost;
-    if (!document.documentElement) return null;
-
-    panelHost = document.createElement("div");
-    panelHost.id = HOST_ID;
-    const shadow = panelHost.attachShadow({ mode: "open" });
-    shadow.innerHTML = `
-      <style>${panelStyles()}</style>
-      <div class="panel">
-        <h1>Feed disabled</h1>
-        <p>Jobs, messages, and the rest of LinkedIn still work.</p>
+  function panelContent(view) {
+    if (view === "feed") {
+      return {
+        overlay: false,
+        html: `
+          <h1>Feed disabled</h1>
+          <p>Jobs, messages, and the rest of LinkedIn still work.</p>
+          <div class="actions">
+            ${link("/jobs/", "Jobs")}
+            ${link("/messaging/", "Messaging", true)}
+            ${link("/notifications/", "Notifications", true)}
+          </div>`,
+      };
+    }
+    if (view === "profile-pending") {
+      return { overlay: true, html: `<p class="quiet">Checking whose profile this is…</p>` };
+    }
+    const failed = ownCheckFailed && route(location.pathname).page === "profile";
+    return {
+      overlay: true,
+      html: `
+        <h1>Profiles are off</h1>
+        <p>${
+          failed
+            ? "LinkedIn Feed Off couldn't confirm this is your profile, so it's hidden. Make sure you're signed in, then open your profile from the button below."
+            : "Other people's profiles and people listings are hidden. You can still look for jobs and edit your own profile."
+        }</p>
         <div class="actions">
-          <a href="${origin()}/jobs/">Jobs</a>
-          <a class="secondary" href="${origin()}/messaging/">Messaging</a>
-          <a class="secondary" href="${origin()}/notifications/">Notifications</a>
-        </div>
-      </div>
-    `;
-    return panelHost;
+          ${link("/jobs/", "Jobs")}
+          ${link("/in/me/", "My profile", true)}
+        </div>`,
+    };
   }
 
-  function insertionPoint() {
-    return (
+  function renderPanel(view) {
+    const { overlay, html } = panelContent(view);
+    const key = `${view}|${ownCheckFailed}`;
+    if (!panelHost?.isConnected) {
+      panelHost = document.getElementById(HOST_ID) || document.createElement("div");
+      panelHost.id = HOST_ID;
+      if (!panelHost.shadowRoot) panelHost.attachShadow({ mode: "open" });
+      panelKey = "";
+    }
+    if (panelKey !== key) {
+      panelHost.shadowRoot.innerHTML = `<style>${panelStyles()}</style><div class="panel">${html}</div>`;
+      panelKey = key;
+    }
+
+    if (overlay) {
+      panelHost.dataset.mode = "overlay";
+      // Outside <body>, so it stays visible while the page itself is hidden.
+      if (panelHost.parentElement !== root) root.appendChild(panelHost);
+      return;
+    }
+    delete panelHost.dataset.mode;
+    const parent =
       document.querySelector(".scaffold-layout__main") ||
       document.querySelector(".core-rail") ||
       document.querySelector("main") ||
-      document.body
-    );
+      document.body;
+    if (parent && panelHost.parentElement !== parent) {
+      parent.insertBefore(panelHost, parent.firstChild);
+    }
   }
 
-  function setPanelVisible(visible) {
-    if (!visible) {
-      panelHost?.remove();
-      panelHost = null;
-      return;
-    }
-    const host = ensurePanel();
-    const parent = insertionPoint();
-    if (!host || !parent) return;
-    if (host.parentElement !== parent) {
-      parent.insertBefore(host, parent.firstChild);
-    }
+  function removePanel() {
+    panelHost?.remove();
+    panelHost = null;
+    panelKey = "";
   }
 
   function apply() {
-    syncAttributes();
-    if (!isFeedPage()) {
-      setPanelVisible(false);
-      clearHidden();
-      return;
+    const view = computeView();
+    syncAttributes(view);
+    if (view !== "feed") clearHidden();
+
+    if (view === "feed") {
+      hideFeedContainers();
+      renderPanel(view);
+    } else if (view === "blocked" || view === "profile-pending") {
+      renderPanel(view);
+    } else {
+      removePanel();
     }
-    hideFeedContainers();
-    setPanelVisible(true);
   }
 
   function queueApply() {
@@ -193,14 +326,27 @@
   }
 
   function boot() {
+    // Hide everything that could be a profile until settings load.
+    syncAttributes(computeViewBeforeSettings());
     patchHistory();
+
+    let pending = 2;
+    const loaded = () => {
+      if (--pending === 0) queueApply();
+    };
     chrome.storage.sync.get(DEFAULTS, (result) => {
       enabled = result.enabled !== false;
-      queueApply();
+      blockProfiles = result.blockProfiles !== false;
+      loaded();
+    });
+    chrome.storage.local.get({ ownSlug: null }, (result) => {
+      if (!ownSlug && result.ownSlug) ownSlug = result.ownSlug;
+      loaded();
     });
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "sync" || !changes.enabled) return;
-      enabled = changes.enabled.newValue !== false;
+      if (area !== "sync") return;
+      if (changes.enabled) enabled = changes.enabled.newValue !== false;
+      if (changes.blockProfiles) blockProfiles = changes.blockProfiles.newValue !== false;
       queueApply();
     });
 
@@ -215,6 +361,14 @@
     window.addEventListener("load", queueApply);
     if (document.body) queueApply();
     else document.addEventListener("DOMContentLoaded", queueApply);
+  }
+
+  function computeViewBeforeSettings() {
+    const page = route(location.pathname).page;
+    if (page === "feed") return "feed";
+    if (page === "profile") return "profile-pending";
+    if (page === "people") return "blocked";
+    return "other";
   }
 
   boot();

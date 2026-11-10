@@ -18,6 +18,28 @@ html[data-li-feed-off="on"][data-li-feed-page="feed"] [data-li-feed-off-hide] {
   display: none !important;
 }
 
+/*
+ * Other people's profiles and people listings: hide the whole page (the
+ * blocking panel is attached to <html>, outside <body>, so it stays visible).
+ * "profile-pending" covers the moment while the extension confirms whether a
+ * profile is yours.
+ */
+html[data-li-feed-off="on"][data-li-feed-page="blocked"],
+html[data-li-feed-off="on"][data-li-feed-page="profile-pending"] {
+  overflow: hidden !important;
+}
+
+html[data-li-feed-off="on"][data-li-feed-page="blocked"] > body,
+html[data-li-feed-off="on"][data-li-feed-page="profile-pending"] > body {
+  visibility: hidden !important;
+}
+
+/* Your own profile: hide the sidebar ("People also viewed", "People you may know"). */
+html[data-li-feed-off="on"][data-li-feed-page="profile-own"] .scaffold-layout__aside,
+html[data-li-feed-off="on"][data-li-feed-page="profile-own"] aside[aria-label*="people" i] {
+  display: none !important;
+}
+
 #li-feed-off-host {
   display: block;
   width: 100%;
